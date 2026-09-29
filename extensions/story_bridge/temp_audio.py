@@ -69,6 +69,16 @@ class AudioStore:
     def _asset(row: tuple) -> AudioAsset:
         return AudioAsset(row[0], Path(row[1]), row[5], row[6])
 
+    @staticmethod
+    def _gone(path: Path) -> bool:
+        try:
+            path.lstat()
+        except FileNotFoundError:
+            return True
+        except OSError:
+            return False
+        return False
+
     def _safe_file(self, path: Path, base: Path) -> Path | None:
         path = Path(path).absolute()
         try:
@@ -202,6 +212,12 @@ class AudioStore:
                         removed += 1
                     except OSError:
                         pass
+                if self._gone(Path(row[1])) and all(
+                    self._gone(Path(name)) for (name,) in aliases
+                ):
+                    with self._db:
+                        self._db.execute("DELETE FROM aliases WHERE asset_id = ?", (row[0],))
+                        self._db.execute("DELETE FROM assets WHERE id = ?", (row[0],))
         return removed
 
     def close(self) -> None:

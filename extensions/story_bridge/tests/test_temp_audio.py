@@ -1,4 +1,5 @@
 import os
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -219,4 +220,73 @@ def test_failed_verification_read_remains_retryable(tmp_path, monkeypatch):
     assert source.exists()
     assert store.sweep() == 1
     assert not source.exists()
+    store.close()
+
+
+def test_path_can_be_registered_again_after_expired_file_is_swept(tmp_path):
+    now = [1000.0]
+    store = AudioStore(tmp_path / "owned", clock=lambda: now[0])
+    source = store.generated_dir / "speech.wav"
+    source.write_bytes(b"first")
+    first = store.register(source, created_at=1000)
+
+    now[0] = 1300
+    assert store.sweep() == 1
+    source.write_bytes(b"second")
+    second = store.register(source, created_at=1300)
+
+    assert second.id != first.id
+    assert second.expires_at == 1600
+    assert store.acquire(source) == second
+    store.release(second.id)
+    store.close()
+
+
+def test_sweep_retires_registry_rows_after_files_are_gone(tmp_path):
+    now = [1000.0]
+    root = tmp_path / "owned"
+    store = AudioStore(root, clock=lambda: now[0])
+    for index in range(5):
+        source = store.generated_dir / f"speech-{index}.wav"
+        source.write_bytes(f"wave-{index}".encode())
+        store.register(source, created_at=now[0])
+        alias = store.cache_dir / source.name
+        alias.write_bytes(source.read_bytes())
+        now[0] += 300
+        assert store.sweep() == 2
+
+    with sqlite3.connect(root / "audio.sqlite3") as db:
+        assert db.execute("SELECT count(*) FROM assets").fetchone()[0] == 0
+        assert db.execute("SELECT count(*) FROM aliases").fetchone()[0] == 0
+    store.close()
+
+
+def test_registry_retains_locked_alias_until_retry_succeeds(tmp_path, monkeypatch):
+    now = [1000.0]
+    root = tmp_path / "owned"
+    store = AudioStore(root, clock=lambda: now[0])
+    source = store.generated_dir / "speech.wav"
+    source.write_bytes(b"wave-test")
+    store.register(source, created_at=1000)
+    alias = store.cache_dir / "speech.wav"
+    alias.write_bytes(b"wave-test")
+    now[0] = 1300
+
+    real_unlink = Path.unlink
+    attempts = [0]
+
+    def locked_once(path, *args, **kwargs):
+        if path == alias and attempts[0] == 0:
+            attempts[0] += 1
+            raise PermissionError("file in use")
+        return real_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", locked_once)
+    assert store.sweep() == 1
+    assert alias.exists()
+    with sqlite3.connect(root / "audio.sqlite3") as db:
+        assert db.execute("SELECT count(*) FROM assets").fetchone()[0] == 1
+    assert store.sweep() == 1
+    with sqlite3.connect(root / "audio.sqlite3") as db:
+        assert db.execute("SELECT count(*) FROM assets").fetchone()[0] == 0
     store.close()
