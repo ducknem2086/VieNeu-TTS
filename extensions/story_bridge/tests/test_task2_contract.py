@@ -142,8 +142,27 @@ def test_ui_and_client_routes_pick_up_files_created_after_startup(tmp_path: Path
         client_dir.mkdir()
         (ui / "index.html").write_text("<h1>Story</h1>", encoding="utf-8")
         (client_dir / "speech-client.js").write_text("export const speech = true;", encoding="utf-8")
+        (ui / "styles.css").write_text("body { color: navy; }", encoding="utf-8")
+        (ui / "app.js").write_text("export const app = true;", encoding="utf-8")
         assert client.get("/").text == "<h1>Story</h1>"
         assert "export const speech" in client.get("/client/speech-client.js").text
+        assert "color: navy" in client.get("/ui/styles.css").text
+        assert "export const app" in client.get("/ui/app.js").text
+
+
+def test_overflowing_temperature_returns_structured_422(tmp_path: Path):
+    store = AudioStore(tmp_path / "audio")
+    app = create_app({}, FakeBridge(store), store, mount_gradio=False)
+    with TestClient(app, raise_server_exceptions=False) as client:
+        for value in ("1e999", "-1e999"):
+            response = client.post(
+                "/api/v1/speech",
+                content='{"text":"hello","temperature":' + value + "}",
+                headers={"content-type": "application/json"},
+            )
+            assert response.status_code == 422
+            assert response.headers["content-type"].startswith("application/json")
+            assert response.json()["detail"]
 
 
 def test_wildcard_bind_uses_loopback_for_gradio_client(monkeypatch):

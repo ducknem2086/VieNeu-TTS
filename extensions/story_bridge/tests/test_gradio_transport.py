@@ -19,7 +19,9 @@ from extensions.story_bridge.temp_audio import AudioStore
 @pytest.fixture
 def live_bridge(tmp_path, monkeypatch):
     store = AudioStore(tmp_path / "owned")
-    monkeypatch.setenv("GRADIO_TEMP_DIR", str(store.cache_dir))
+    public_cache = store.root / "gradio"
+    public_cache.mkdir()
+    monkeypatch.setenv("GRADIO_TEMP_DIR", str(public_cache))
     monkeypatch.setattr(tempfile, "tempdir", str(store.generated_dir))
     upstream = SimpleNamespace(model_loaded=False, tts=None)
 
@@ -43,6 +45,8 @@ def live_bridge(tmp_path, monkeypatch):
         yield str(path), "ok", ""
 
     with gr.Blocks() as demo:
+        upstream.reference_audio = gr.Audio(type="filepath")
+        upstream.download_btn = gr.DownloadButton()
         inputs = [
             gr.Textbox(), gr.Dropdown(choices=[("Ly", "ly")], value=None), gr.Audio(type="filepath"),
             gr.Textbox(), gr.State("preset_mode"), gr.Radio(choices=["Standard (Một lần)"], value="Standard (Một lần)"),
@@ -158,3 +162,41 @@ def test_direct_gradio_call_cannot_bypass_shared_queue(live_bridge):
             json={"data": ["hello", "ly", None, "", "Standard (Một lần)", True, 16, .8, 256, False]},
         )
         assert response.status_code == 404, response.text
+
+
+def test_external_reference_preview_uses_public_cache_while_outputs_use_owned_cache(live_bridge, tmp_path):
+    url, bridge, store = live_bridge
+    from gradio.processing_utils import move_files_to_cache
+
+    reference = tmp_path / "reference.wav"
+    with wave.open(str(reference), "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(8000)
+        wav.writeframes(b"\0\0" * 40)
+    preview = bridge.upstream.reference_audio.postprocess(str(reference))
+    cached = move_files_to_cache(preview, bridge.upstream.reference_audio)
+    preview_path = Path(cached.path if hasattr(cached, "path") else cached["path"])
+    assert preview_path.is_relative_to(store.root / "gradio")
+    with httpx.Client(timeout=30) as client:
+        response = client.get(url + "/_gradio/gradio_api/file=" + preview_path.as_posix())
+        assert response.status_code == 200, response.text
+        assert response.content[:4] == b"RIFF"
+    assert bridge.upstream.demo.fns[bridge.upstream.gen_event["id"]].outputs[0].GRADIO_CACHE == str(store.cache_dir)
+    assert bridge.upstream.download_btn.GRADIO_CACHE == str(store.cache_dir)
+
+
+def test_download_button_copy_stays_guarded_and_expires(live_bridge):
+    url, bridge, store = live_bridge
+    with httpx.Client(timeout=30) as client:
+        speech = client.post(url + "/api/v1/speech", json={"text": "hello"})
+        assert speech.status_code == 200, speech.text
+        source = next(store.generated_dir.glob("*.wav"))
+        copied = Path(bridge.upstream.download_btn.move_resource_to_block_cache(source))
+        assert copied.is_relative_to(store.cache_dir)
+        asset = store.find(copied)
+        assert asset is not None
+        address = url + "/_gradio/gradio_api/file=" + copied.as_posix()
+        assert client.get(address).status_code == 200
+        store._clock = lambda: asset.expires_at
+        assert client.get(address).status_code == 410

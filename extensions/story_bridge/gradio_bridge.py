@@ -89,6 +89,13 @@ class GradioBridge:
             for binding in (load, *synthesis_bindings):
                 binding.concurrency_id = "story-bridge-model"
                 binding.concurrency_limit = 1
+            # Only generated audio leaves through these components. Ordinary
+            # inputs and reference previews keep Gradio's sibling cache.
+            for binding in synthesis_bindings:
+                binding.outputs[0].GRADIO_CACHE = str(self.store.cache_dir)
+            download_button = getattr(self.upstream, "download_btn", None)
+            if download_button is not None:
+                download_button.GRADIO_CACHE = str(self.store.cache_dir)
             for binding in synthesis_bindings:
                 if not getattr(binding, "types_generator", False):
                     raise BridgeError("synthesis event must remain a generator")

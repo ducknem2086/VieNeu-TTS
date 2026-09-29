@@ -10,6 +10,7 @@ from typing import Any
 from urllib.parse import unquote
 
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -148,6 +149,18 @@ def create_app(settings: Any, bridge, store: AudioStore, *, mount_gradio: bool =
         expose_headers=["X-Audio-Id", "X-Audio-Expires-At", "Content-Disposition"],
     )
     app.add_middleware(ManagedFileGuard, store=store)
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_error(_request, exc: RequestValidationError):
+        # Pydantic includes the original input in error details. JSON exponent
+        # overflow becomes infinity, which Starlette refuses to serialize.
+        return JSONResponse(
+            {"detail": [
+                {"loc": error["loc"], "msg": error["msg"], "type": error["type"]}
+                for error in exc.errors()
+            ]},
+            status_code=422,
+        )
     pending = int(_setting(settings, "max_pending_speech", 4))
     semaphore = asyncio.Semaphore(max(1, pending))
     sweep_task = None
@@ -243,6 +256,9 @@ def create_app(settings: Any, bridge, store: AudioStore, *, mount_gradio: bool =
 
         bridge.install()
         bridge.upstream.demo.queue(api_open=False, default_concurrency_limit=1)
-        gr.mount_gradio_app(app, bridge.upstream.demo, path="/_gradio")
+        gr.mount_gradio_app(
+            app, bridge.upstream.demo, path="/_gradio", allowed_paths=[str(store.cache_dir)]
+        )
     app.mount("/client", StaticFiles(directory=str(client_dir), check_dir=False), name="client")
+    app.mount("/ui", StaticFiles(directory=str(ui_dir), check_dir=False), name="ui")
     return app

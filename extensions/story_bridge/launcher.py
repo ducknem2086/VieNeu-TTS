@@ -12,14 +12,14 @@ def create_runtime(settings: Settings):
     settings.runtime_dir.mkdir(parents=True, exist_ok=True)
     generated = settings.runtime_dir / "generated"
     generated.mkdir(parents=True, exist_ok=True)
-    cache = settings.runtime_dir / "cache"
-    cache.mkdir(parents=True, exist_ok=True)
+    gradio_cache = settings.runtime_dir / "gradio"
+    gradio_cache.mkdir(parents=True, exist_ok=True)
     # Upstream uses tempfile.NamedTemporaryFile for WAV output. Set both knobs
     # before importing it so generated files are owned by AudioStore.
     os.environ.setdefault("TMPDIR", str(generated))
     os.environ.setdefault("TEMP", str(generated))
     os.environ.setdefault("TMP", str(generated))
-    os.environ["GRADIO_TEMP_DIR"] = str(cache)
+    os.environ["GRADIO_TEMP_DIR"] = str(gradio_cache)
     tempfile.tempdir = str(generated)
 
 
