@@ -2,11 +2,13 @@ from pathlib import Path
 import asyncio
 import threading
 import wave
+import warnings
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 from fastapi.testclient import TestClient
 
-from extensions.story_bridge.api import LeasedFileResponse, create_app
+from extensions.story_bridge.api import LeasedFileResponse, ManagedFileGuard, create_app
 from extensions.story_bridge.config import Settings
 from extensions.story_bridge.gradio_bridge import BridgeError
 from extensions.story_bridge.temp_audio import AudioStore
@@ -34,6 +36,29 @@ class FakeBridge:
             output.setframerate(8000)
             output.writeframes(b"\0\0" * 80)
         return self.store.register(path, created_at=1000)
+
+
+def test_lifespan_cleans_on_startup_and_periodically_without_deprecated_events(tmp_path):
+    now = [1000]
+    store = AudioStore(tmp_path / "audio", clock=lambda: now[0])
+    first = store.generated_dir / "first.wav"
+    first.write_bytes(b"wave")
+    store.register(first, created_at=700)
+    with warnings.catch_warnings():
+        warnings.filterwarnings("error", message=".*", category=DeprecationWarning,
+                                module=r"extensions\.story_bridge\.api")
+        app = create_app({}, FakeBridge(store), store, mount_gradio=False)
+    with TestClient(app):
+        assert not first.exists()
+        second = store.generated_dir / "second.wav"
+        second.write_bytes(b"wave")
+        store.register(second, created_at=1000)
+        now[0] = 1300
+        deadline = time.monotonic() + 7
+        while second.exists() and time.monotonic() < deadline:
+            time.sleep(.05)
+        assert not second.exists()
+    store.close()
 
 
 def test_speech_returns_binary_and_releases_read_lease(tmp_path: Path):
@@ -195,3 +220,35 @@ def test_file_response_releases_lease_when_client_send_breaks(tmp_path: Path):
     except ConnectionError:
         pass
     assert store._leases == {}
+
+
+def test_both_gradio_routes_pin_reads_and_release_on_disconnect(tmp_path):
+    now = [1000]
+    store = AudioStore(tmp_path / "audio", clock=lambda: now[0])
+    source = store.generated_dir / "speech.wav"
+    source.write_bytes(b"RIFF")
+    store.register(source, created_at=1000)
+
+    async def interrupted(scope, receive, send):
+        now[0] = 1300
+        assert store.sweep() == 0
+        assert source.exists()
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+
+    async def receive():
+        return {"type": "http.disconnect"}
+
+    async def send(_message):
+        raise ConnectionError("disconnected")
+
+    for separator in ("=", "/"):
+        now[0] = 1000
+        scope = {"type": "http", "method": "GET", "headers": [],
+                 "path": "/_gradio/gradio_api/file" + separator + source.as_posix()}
+        try:
+            asyncio.run(ManagedFileGuard(interrupted, store)(scope, receive, send))
+        except ConnectionError:
+            pass
+        assert store._leases == {}
+    assert store.sweep() == 1
+    store.close()

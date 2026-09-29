@@ -1,10 +1,75 @@
 import os
 import sqlite3
+import wave
 from pathlib import Path
 
 import pytest
 
 from extensions.story_bridge.temp_audio import AudioExpired, AudioStore
+
+
+@pytest.mark.parametrize("restart_at", [1299, 1300])
+def test_restart_recovers_unregistered_completed_wav_with_original_deadline(tmp_path, restart_at):
+    root = tmp_path / "owned"
+    store = AudioStore(root, clock=lambda: 1000)
+    source = store.generated_dir / "orphan.wav"
+    with wave.open(str(source), "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(8000)
+        wav.writeframes(b"\0\0" * 80)
+    os.utime(source, (1000, 1000))
+    alias = store.cache_dir / source.name
+    alias.write_bytes(source.read_bytes())
+    unrelated = store.cache_dir / "different" / source.name
+    unrelated.parent.mkdir()
+    unrelated.write_bytes(b"different bytes")
+    outside = tmp_path / "outside.wav"
+    outside.write_bytes(source.read_bytes())
+    store.close()  # Simulate completion followed by a crash before registration.
+
+    now = [restart_at]
+    restarted = AudioStore(root, clock=lambda: now[0])
+    if restart_at == 1299:
+        asset = restarted.find(source)
+        assert asset is not None
+        assert (asset.created_at, asset.expires_at) == (1000, 1300)
+        assert restarted.acquire(alias) == asset
+        now[0] = 1300
+        assert restarted.sweep() == 0  # Recovered aliases obey read leases too.
+        restarted.release(asset.id)
+        assert restarted.sweep() == 2
+    assert not source.exists()
+    assert not alias.exists()
+    assert outside.exists()
+    assert unrelated.read_bytes() == b"different bytes"
+    restarted.close()
+
+
+def test_restart_does_not_claim_replaced_registered_bytes_or_incomplete_wavs(tmp_path):
+    root = tmp_path / "owned"
+    store = AudioStore(root, clock=lambda: 1000)
+    source = store.generated_dir / "replaced.wav"
+    source.write_bytes(b"original registered bytes")
+    asset = store.register(source, created_at=1000)
+    store.close()
+    with wave.open(str(source), "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(8000)
+        wav.writeframes(b"\0\0" * 80)
+    replacement = source.read_bytes()
+    partial = source.with_name("partial.wav")
+    partial.write_bytes(replacement[:-2])
+    os.utime(source, (700, 700))
+    os.utime(partial, (700, 700))
+
+    restarted = AudioStore(root, clock=lambda: 1300)
+    assert source.read_bytes() == replacement
+    assert restarted.find(source) == asset
+    assert partial.exists()
+    assert restarted.find(partial) is None
+    restarted.close()
 
 
 def test_expiry_boundary_denies_new_reads_and_removes_generated_wav(tmp_path):
@@ -171,6 +236,11 @@ def test_symlink_to_external_file_is_not_registered_or_deleted(tmp_path):
     assert store.sweep() == 0
     assert outside.read_bytes() == b"external"
     store.close()
+
+    restarted = AudioStore(tmp_path / "owned", clock=lambda: 1600.0)
+    assert restarted.find(source_link) is None
+    assert outside.read_bytes() == b"external"
+    restarted.close()
 
 
 def test_failed_delete_remains_retryable(tmp_path, monkeypatch):

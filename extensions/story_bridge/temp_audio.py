@@ -8,6 +8,7 @@ import stat
 import threading
 import time
 import uuid
+import wave
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -53,7 +54,31 @@ class AudioStore:
                 "CREATE TABLE IF NOT EXISTS aliases ("
                 "path TEXT PRIMARY KEY, asset_id TEXT NOT NULL REFERENCES assets(id))"
             )
+        self._recover_completed_outputs()
         self.sweep()
+
+    def _recover_completed_outputs(self) -> None:
+        """Recover the callback-completion/registration crash window at startup."""
+        for candidate in self.generated_dir.rglob("*"):
+            if candidate.suffix.lower() != ".wav":
+                continue
+            source = self._safe_file(candidate, self.generated_dir)
+            if source is None or self._db.execute(
+                "SELECT 1 FROM assets WHERE path = ?", (str(source),)
+            ).fetchone():
+                continue
+            try:
+                # A partially written or invalid file is not a completed output.
+                with wave.open(str(source), "rb") as audio:
+                    frames = audio.getnframes()
+                    if frames <= 0:
+                        continue
+                    audio.setpos(frames - 1)
+                    if len(audio.readframes(1)) != audio.getnchannels() * audio.getsampwidth():
+                        continue
+                self.register(source)  # Original mtime preserves remaining TTL.
+            except (OSError, EOFError, wave.Error, ValueError):
+                continue
 
     @staticmethod
     def _fingerprint(path: Path) -> tuple[int, str]:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -65,13 +66,10 @@ class ManagedFileGuard:
     @staticmethod
     def _candidate(scope) -> Path | None:
         path = scope.get("path", "")
-        marker = "/gradio_api/file="
-        if marker not in path:
-            marker = "/file="
-            if marker not in path:
-                return None
-        raw = path.split(marker, 1)[1]
-        return Path(unquote(raw))
+        for marker in ("/gradio_api/file=", "/gradio_api/file/", "/file="):
+            if marker in path:
+                return Path(unquote(path.split(marker, 1)[1]))
+        return None
 
     def _owned_namespace(self, candidate: Path) -> bool:
         candidate = candidate.absolute()
@@ -91,14 +89,16 @@ class ManagedFileGuard:
         asset = self.store.find(candidate)
         if asset is None:
             if self._owned_namespace(candidate):
-                await JSONResponse({"detail": "managed audio is unavailable"}, status_code=404)(scope, receive, send)
+                await JSONResponse({"detail": "managed audio is unavailable"}, status_code=404,
+                                   headers={"Cache-Control": "no-store"})(scope, receive, send)
                 return
             await self.app(scope, receive, send)
             return
         try:
             leased = self.store.acquire(candidate)
         except AudioExpired:
-            await JSONResponse({"detail": "managed audio has expired"}, status_code=410)(scope, receive, send)
+            await JSONResponse({"detail": "managed audio has expired"}, status_code=410,
+                               headers={"Cache-Control": "no-store"})(scope, receive, send)
             return
         released = False
 
@@ -115,10 +115,9 @@ class ManagedFileGuard:
 
         try:
             await self.app(scope, receive, guarded_send)
-        except BaseException:
+        finally:
             if not released:
                 self.store.release(leased.id)
-            raise
 
 
 class LeasedFileResponse(FileResponse):
@@ -135,7 +134,23 @@ class LeasedFileResponse(FileResponse):
 
 
 def create_app(settings: Any, bridge, store: AudioStore, *, mount_gradio: bool = True) -> FastAPI:
-    app = FastAPI(title="VieNeu Story Bridge")
+    @asynccontextmanager
+    async def lifespan(_app):
+        store.sweep()
+
+        async def sweep_loop():
+            while True:
+                await asyncio.sleep(5)
+                await asyncio.to_thread(store.sweep)
+
+        sweep_task = asyncio.create_task(sweep_loop())
+        try:
+            yield
+        finally:
+            sweep_task.cancel()
+            await asyncio.gather(sweep_task, return_exceptions=True)
+
+    app = FastAPI(title="VieNeu Story Bridge", lifespan=lifespan)
     extension_dir = Path(__file__).resolve().parent
     ui_dir = Path(_setting(settings, "ui_dir", extension_dir / "ui"))
     client_dir = Path(_setting(settings, "client_dir", extension_dir / "client"))
@@ -163,25 +178,6 @@ def create_app(settings: Any, bridge, store: AudioStore, *, mount_gradio: bool =
         )
     pending = int(_setting(settings, "max_pending_speech", 4))
     semaphore = asyncio.Semaphore(max(1, pending))
-    sweep_task = None
-
-    @app.on_event("startup")
-    async def startup():
-        nonlocal sweep_task
-        store.sweep()
-
-        async def sweep_loop():
-            while True:
-                await asyncio.sleep(5)
-                await asyncio.to_thread(store.sweep)
-
-        sweep_task = asyncio.create_task(sweep_loop())
-
-    @app.on_event("shutdown")
-    async def shutdown():
-        if sweep_task:
-            sweep_task.cancel()
-            await asyncio.gather(sweep_task, return_exceptions=True)
 
     @app.get("/health")
     async def health():

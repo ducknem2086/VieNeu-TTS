@@ -42,7 +42,7 @@ function reserveTab() {
   return tab;
 }
 
-function showBlob(tab, blob) {
+function showBlob(tab, blob, onDispose) {
   const url = URL.createObjectURL(
     blob.type === "audio/wav" ? blob : new Blob([blob], { type: "audio/wav" }),
   );
@@ -55,6 +55,7 @@ function showBlob(tab, blob) {
     released = true;
     clearInterval(watcher);
     URL.revokeObjectURL(url);
+    onDispose?.(dispose);
   }
   try {
     tab.location = url;
@@ -104,22 +105,22 @@ export function createSpeechClient({
   }
 
   // Also lets a page reopen its latest downloaded result without another speech request.
-  function openBlobInNewTab(blob) {
+  function openBlobInNewTab(blob, { onDispose } = {}) {
     const tab = reserveTab();
     try {
-      return showBlob(tab, blob);
+      return showBlob(tab, blob, onDispose);
     } catch (error) {
       tab.close();
       throw error;
     }
   }
 
-  async function openInNewTab(payload, { signal } = {}) {
+  async function openInNewTab(payload, { signal, onDispose } = {}) {
     const tab = reserveTab(); // Happens in the synchronous click stack.
     try {
       const result = await synthesize(payload, { signal });
       return {
-        ...showBlob(tab, result.blob),
+        ...showBlob(tab, result.blob, onDispose),
         blob: result.blob,
         audioId: result.audioId,
         expiresAt: result.expiresAt,

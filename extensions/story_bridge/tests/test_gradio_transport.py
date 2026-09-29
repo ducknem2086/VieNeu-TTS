@@ -100,19 +100,37 @@ def test_managed_gradio_range_read_expires_and_unknown_copy_is_denied(live_bridg
         response = client.post(url + "/api/v1/speech", json={"text": "hello", "voice_id": "ly"})
         assert response.status_code == 200, response.text
         alias = next(store.cache_dir.rglob("*.wav"))
-        file_url = url + "/_gradio/gradio_api/file=" + alias.as_posix()
-        active = client.get(file_url, headers={"Range": "bytes=0-3"})
-        assert active.status_code == 206, active.text
-        assert active.content == b"RIFF"
-        assert active.headers["cache-control"] == "no-store"
+        file_urls = [url + "/_gradio/gradio_api/file" + separator + alias.as_posix()
+                     for separator in ("=", "/")]
+        for file_url in file_urls:
+            for method, headers, expected in (("GET", {}, 200), ("GET", {"Range": "bytes=0-3"}, 206), ("HEAD", {}, 200)):
+                active = client.request(method, file_url, headers=headers)
+                # Gradio 5.49 registers HEAD only for the file= spelling.
+                if method == "HEAD" and "/gradio_api/file/" in file_url:
+                    expected = 405
+                assert active.status_code == expected, active.text
+                assert active.headers["cache-control"] == "no-store"
+                assert active.content[:4] == (b"" if method == "HEAD" else b"RIFF")
+                deadline = time.monotonic() + 1
+                while store._leases and time.monotonic() < deadline:
+                    time.sleep(.01)
+                assert store._leases == {}
         asset = store.find(alias)
         store._clock = lambda: asset.expires_at
-        expired = client.get(file_url, headers={"Range": "bytes=0-3"})
-        assert expired.status_code == 410
+        for file_url in file_urls:
+            for method, headers in (("GET", {}), ("GET", {"Range": "bytes=0-3"}), ("HEAD", {})):
+                expired = client.request(method, file_url, headers=headers)
+                assert expired.status_code == 410
+                assert expired.headers["cache-control"] == "no-store"
         orphan = store.cache_dir / "unregistered.wav"
         orphan.write_bytes(b"RIFF")
-        unknown = client.get(url + "/_gradio/gradio_api/file=" + orphan.as_posix())
-        assert unknown.status_code == 404
+        for separator in ("=", "/"):
+            for method in ("GET", "HEAD"):
+                unknown = client.request(method, url + "/_gradio/gradio_api/file" + separator + orphan.as_posix())
+                assert unknown.status_code == 404
+                assert unknown.headers["cache-control"] == "no-store"
+        assert store.sweep() >= 2
+        assert not alias.exists()
 
 
 def test_gradio_native_story_call_is_captured_without_changing_outputs(live_bridge):
@@ -179,9 +197,10 @@ def test_external_reference_preview_uses_public_cache_while_outputs_use_owned_ca
     preview_path = Path(cached.path if hasattr(cached, "path") else cached["path"])
     assert preview_path.is_relative_to(store.root / "gradio")
     with httpx.Client(timeout=30) as client:
-        response = client.get(url + "/_gradio/gradio_api/file=" + preview_path.as_posix())
-        assert response.status_code == 200, response.text
-        assert response.content[:4] == b"RIFF"
+        for separator in ("=", "/"):
+            response = client.get(url + "/_gradio/gradio_api/file" + separator + preview_path.as_posix())
+            assert response.status_code == 200, response.text
+            assert response.content[:4] == b"RIFF"
     assert bridge.upstream.demo.fns[bridge.upstream.gen_event["id"]].outputs[0].GRADIO_CACHE == str(store.cache_dir)
     assert bridge.upstream.download_btn.GRADIO_CACHE == str(store.cache_dir)
 

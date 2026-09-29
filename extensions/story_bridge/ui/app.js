@@ -10,6 +10,7 @@ const load = $("load-model");
 const reopen = $("reopen");
 const status = $("status");
 const activeTabs = new Set();
+const forgetTab = (dispose) => activeTabs.delete(dispose);
 let latestBlob = null;
 let busy = false;
 let modelLoaded = false;
@@ -31,7 +32,7 @@ function setBusy(value) {
   reopen.disabled = value;
   $("workspace").setAttribute("aria-busy", String(value));
   start.querySelector("span").textContent = value
-    ? "Đang tạo âm thanh..."
+    ? "Đang xử lý..."
     : "Bắt đầu";
 }
 
@@ -145,7 +146,7 @@ form.addEventListener("submit", async (event) => {
   setStatus("Đang tạo âm thanh. Thẻ mới sẽ mở khi hoàn tất...");
   try {
     // The client reserves the tab synchronously before its first await.
-    const resultPromise = client.openInNewTab(payload);
+    const resultPromise = client.openInNewTab(payload, { onDispose: forgetTab });
     const result = await resultPromise;
     activeTabs.add(result.dispose);
     latestBlob = result.blob;
@@ -173,7 +174,7 @@ form.addEventListener("submit", async (event) => {
 reopen.addEventListener("click", () => {
   if (busy || !latestBlob) return;
   try {
-    const tab = client.openBlobInNewTab(latestBlob);
+    const tab = client.openBlobInNewTab(latestBlob, { onDispose: forgetTab });
     activeTabs.add(tab.dispose);
     setStatus("Đã mở lại âm thanh gần nhất trong thẻ mới.", "success");
   } catch (error) {
