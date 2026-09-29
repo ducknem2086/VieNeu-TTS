@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#102d32" />
+    <title>Story Bridge — Không gian đọc</title>
+    <link rel="stylesheet" href="/ui/styles.css" />
+    <script type="module" src="/ui/app.js"></script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="intro" aria-label="Giới thiệu Story Bridge">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true">V.</span
+          ><span
+            >VIE<span class="brand-accent">NEU</span
+            ><small>STORY BRIDGE</small></span
+          >
+        </div>
+        <div class="intro-copy">
+          <p class="eyebrow">KHÔNG GIAN ĐỌC</p>
+          <h1>Để câu chữ<br /><em>cất lời.</em></h1>
+          <p class="intro-description">
+            Biến đoạn văn tiếng Việt thành âm thanh. Viết hoặc dán câu chuyện,
+            chọn giọng đọc, rồi lắng nghe trong một thẻ âm thanh riêng.
+          </p>
+          <div class="intro-rule" aria-hidden="true"></div>
+          <p class="intro-note">
+            <span aria-hidden="true">✳</span> Một khoảng lặng cho câu chuyện
+            của bạn.
+          </p>
+        </div>
+        <p class="intro-foot">
+          VieNeu TTS <span aria-hidden="true">/</span> Trình đọc truyện
+        </p>
+      </aside>
+
+      <main class="workspace" id="workspace">
+        <header class="workspace-header">
+          <div>
+            <p class="eyebrow">BÀN BIÊN TẬP</p>
+            <h2>Đọc thành lời</h2>
+          </div>
+          <div class="readiness" id="readiness" data-state="checking">
+            <span class="readiness-dot" aria-hidden="true"></span
+            ><span id="readiness-text">Đang kiểm tra</span>
+          </div>
+        </header>
+
+        <form id="story-form">
+          <div class="section-heading">
+            <label for="story-text">Nội dung của bạn</label
+            ><span id="character-count" aria-live="polite"
+              >0 / 20.000 ký tự</span
+            >
+          </div>
+          <div class="editor-wrap">
+            <textarea
+              id="story-text"
+              name="text"
+              maxlength="20000"
+              required
+              aria-describedby="editor-help"
+              placeholder="Dán một đoạn truyện hoặc bắt đầu viết ở đây..."
+            ></textarea>
+          </div>
+          <p class="field-help" id="editor-help">
+            Dấu câu và ngắt đoạn giúp câu chuyện có nhịp điệu tự nhiên.
+          </p>
+
+          <div class="settings-row">
+            <div class="voice-field">
+              <label for="voice-select">Giọng đọc</label>
+              <div class="select-wrap">
+                <select id="voice-select" name="voice_id">
+                  <option value="">Tự động · giọng mặc định</option>
+                </select>
+              </div>
+              <p class="field-help">Có thể chọn giọng sau khi tải mô hình.</p>
+            </div>
+            <div class="model-field">
+              <span class="field-label">Mô hình</span
+              ><button type="button" class="load-button" id="load-model">
+                Tải mô hình <span aria-hidden="true">↗</span>
+              </button>
+              <p class="field-help">Hoặc bắt đầu để tự tải khi cần.</p>
+            </div>
+          </div>
+
+          <details id="advanced" class="advanced">
+            <summary>
+              <span>Tùy chỉnh nâng cao</span
+              ><span class="advanced-indicator" aria-hidden="true">+</span>
+            </summary>
+            <div class="advanced-grid">
+              <div class="control">
+                <label for="temperature">Độ biến thiên</label
+                ><input
+                  id="temperature"
+                  name="temperature"
+                  type="number"
+                  min="0.1"
+                  max="1.5"
+                  step="0.1"
+                  value="0.8"
+                /><small>0,1–1,5</small>
+              </div>
+              <div class="control">
+                <label for="max-chars">Ký tự mỗi đoạn</label
+                ><input
+                  id="max-chars"
+                  name="max_chars_per_chunk"
+                  type="number"
+                  min="128"
+                  max="512"
+                  step="1"
+                  value="256"
+                /><small>128–512</small>
+              </div>
+              <div class="control">
+                <label for="batch-size">Số đoạn mỗi lượt</label
+                ><input
+                  id="batch-size"
+                  name="batch_size"
+                  type="number"
+                  min="1"
+                  max="64"
+                  step="1"
+                  value="16"
+                /><small>1–64</small>
+              </div>
+              <label class="checkbox-control" for="use-batch"
+                ><input
+                  id="use-batch"
+                  name="use_batch"
+                  type="checkbox"
+                  checked
+                /><span>Ghép các đoạn thành từng lượt</span></label
+              >
+            </div>
+          </details>
+
+          <div class="action-area">
+            <button type="submit" class="start-button" id="start">
+              <span>Bắt đầu</span
+              ><span class="button-arrow" aria-hidden="true">↗</span>
+            </button>
+            <button type="button" class="reopen-button" id="reopen" hidden>
+              Nghe lại kết quả gần nhất <span aria-hidden="true">↗</span>
+            </button>
+            <p class="action-help">
+              Âm thanh mở trong thẻ mới bằng trình phát của trình duyệt.
+            </p>
+          </div>
+        </form>
+
+        <div
+          class="status"
+          id="status"
+          role="status"
+          aria-live="polite"
+          data-kind="info"
+        >
+          <span class="status-icon" aria-hidden="true">●</span
+          ><span id="status-text">Đang kết nối với dịch vụ đọc...</span>
+        </div>
+        <footer class="workspace-foot">
+          <span>STORY BRIDGE <span aria-hidden="true">·</span> 01</span
+          ><span>Viết. Nghe. Cảm nhận.</span>
+        </footer>
+      </main>
+    </div>
+  </body>
+</html>
