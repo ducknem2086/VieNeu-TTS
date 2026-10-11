@@ -1,3 +1,5 @@
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -5,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from extensions.story_bridge.api import create_app
 from extensions.story_bridge.config import Settings
+from extensions.story_bridge.gradio_bridge import GradioBridge
 from extensions.story_bridge.temp_audio import AudioStore
 from extensions.story_bridge.tests.test_task2_contract import FakeBridge
 
@@ -67,3 +70,47 @@ def test_settings_defaults(monkeypatch):
         monkeypatch.delenv(name, raising=False)
     settings = Settings.from_env()
     assert (settings.max_text_bytes, settings.audio_ttl_seconds, settings.upstream_timeout_seconds) == (30720, 300.0, 900.0)
+
+
+class BlockingBridge(FakeBridge):
+    def __init__(self, store):
+        super().__init__(store)
+        self.entered = threading.Event()
+        self.release = threading.Event()
+
+    def synthesize(self, request):
+        self.entered.set()
+        self.release.wait(timeout=5)
+        return super().synthesize(request)
+
+
+def test_busy_queue_returns_retry_after(tmp_path):
+    store = AudioStore(tmp_path / "audio", clock=lambda: 1000.0)
+    bridge = BlockingBridge(store)
+    app = create_app({"max_pending_speech": 1}, bridge, store, mount_gradio=False)
+    with TestClient(app) as client, ThreadPoolExecutor(1) as pool:
+        first = pool.submit(client.post, "/api/v1/speech", json={"text": "một"})
+        assert bridge.entered.wait(timeout=2)
+        busy = client.post("/api/v1/speech", json={"text": "hai"})
+        bridge.release.set()
+        assert first.result(timeout=5).status_code == 200
+    assert busy.status_code == 429
+    assert busy.headers["retry-after"] == "30"
+
+
+def test_bridge_client_uses_configured_timeout(monkeypatch, tmp_path):
+    import gradio_client
+    import httpx
+
+    seen = {}
+
+    class FakeClient:
+        def __init__(self, url, **kwargs):
+            seen.update(kwargs)
+
+    monkeypatch.setattr(gradio_client, "Client", FakeClient)
+    bridge = GradioBridge(object(), AudioStore(tmp_path / "a"), "http://x/_gradio", timeout_seconds=900)
+    bridge._client_or_create()
+    timeout = seen["httpx_kwargs"]["timeout"]
+    assert isinstance(timeout, httpx.Timeout)
+    assert timeout.read == 900 and timeout.connect == 10

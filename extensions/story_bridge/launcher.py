@@ -32,8 +32,8 @@ def build_app(settings: Settings | None = None):
     from .gradio_bridge import GradioBridge
     from .temp_audio import AudioStore
 
-    store = AudioStore(settings.runtime_dir)
-    bridge = GradioBridge(upstream, store, settings.upstream_url)
+    store = AudioStore(settings.runtime_dir, ttl_seconds=settings.audio_ttl_seconds)
+    bridge = GradioBridge(upstream, store, settings.upstream_url, timeout_seconds=settings.upstream_timeout_seconds)
     bridge.install()
     return create_app(settings, bridge, store, mount_gradio=True)
 
@@ -43,4 +43,5 @@ def main() -> None:
 
     settings = Settings.from_env()
     app = build_app(settings)
-    uvicorn.run(app, host=settings.host, port=settings.port, workers=1)
+    uvicorn.run(app, host=settings.host, port=settings.port, workers=1,
+                timeout_keep_alive=int(settings.upstream_timeout_seconds))

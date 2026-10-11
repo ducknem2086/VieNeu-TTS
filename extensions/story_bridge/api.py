@@ -221,7 +221,7 @@ def create_app(settings: Any, bridge, store: AudioStore, *, mount_gradio: bool =
                 status_code=422,
             )
         if semaphore.locked() and semaphore._value <= 0:
-            return JSONResponse({"detail": "speech queue is busy"}, status_code=429)
+            return JSONResponse({"detail": "speech queue is busy"}, status_code=429, headers={"Retry-After": "30"})
         await semaphore.acquire()
         try:
             request = SpeechRequest(

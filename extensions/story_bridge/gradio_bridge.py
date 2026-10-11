@@ -26,10 +26,11 @@ class SpeechRequest:
 
 
 class GradioBridge:
-    def __init__(self, upstream: Any, store: AudioStore, upstream_url: str):
+    def __init__(self, upstream: Any, store: AudioStore, upstream_url: str, *, timeout_seconds: float = 900.0):
         self.upstream = upstream
         self.store = store
         self.upstream_url = upstream_url.rstrip("/")
+        self.timeout_seconds = float(timeout_seconds)
         self._lock = threading.RLock()
         self._installed = False
         self._story_binding = None
@@ -154,9 +155,14 @@ class GradioBridge:
 
     def _client_or_create(self):
         if self._client is None:
+            import httpx
             from gradio_client import Client
 
-            self._client = Client(self.upstream_url, download_files=False, verbose=False)
+            # A 30 KiB story synthesizes for minutes on CPU; every httpx call the
+            # client makes (job submit, SSE stream) must outlive that.
+            timeout = httpx.Timeout(self.timeout_seconds, connect=10.0)
+            self._client = Client(self.upstream_url, download_files=False, verbose=False,
+                                  httpx_kwargs={"timeout": timeout})
         return self._client
 
     def load_model(self) -> dict:
