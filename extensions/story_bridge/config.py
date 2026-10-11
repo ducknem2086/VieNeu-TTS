@@ -13,6 +13,9 @@ class Settings:
     cors_origins: list[str] = field(default_factory=lambda: ["http://localhost:5173", "http://localhost:3000"])
     max_pending_speech: int = 4
     upstream_url: str = "http://127.0.0.1:8002/_gradio"
+    max_text_bytes: int = 30720
+    audio_ttl_seconds: float = 300.0
+    upstream_timeout_seconds: float = 900.0
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -27,4 +30,14 @@ class Settings:
             cors_origins=[item.strip() for item in origins.split(",") if item.strip()],
             max_pending_speech=int(os.getenv("STORY_BRIDGE_MAX_PENDING", "4")),
             upstream_url=f"http://{client_host}:{port}/_gradio",
+            max_text_bytes=_positive(int, "STORY_BRIDGE_MAX_TEXT_BYTES", "30720"),
+            audio_ttl_seconds=_positive(float, "STORY_BRIDGE_AUDIO_TTL", "300"),
+            upstream_timeout_seconds=_positive(float, "STORY_BRIDGE_UPSTREAM_TIMEOUT", "900"),
         )
+
+
+def _positive(kind, name: str, default: str):
+    value = kind(os.getenv(name, default))
+    if value <= 0:
+        raise ValueError(f"{name} must be positive")
+    return value

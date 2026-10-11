@@ -24,7 +24,7 @@ from .temp_audio import AudioExpired, AudioStore
 class SpeechPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    text: str
+    text: str = Field(description="Nonblank text, at most STORY_BRIDGE_MAX_TEXT_BYTES (default 30720) UTF-8 bytes.")
     voice_id: str | None = None
     temperature: float = 0.8
     max_chars_per_chunk: int = Field(256, ge=128, le=512)
@@ -34,8 +34,8 @@ class SpeechPayload(BaseModel):
     @field_validator("text")
     @classmethod
     def valid_text(cls, value: str) -> str:
-        if not value.strip() or len(value) > 20_000:
-            raise ValueError("text must be nonblank and at most 20000 characters")
+        if not value.strip():
+            raise ValueError("text must be nonblank")
         return value
 
     @field_validator("temperature")
@@ -178,6 +178,7 @@ def create_app(settings: Any, bridge, store: AudioStore, *, mount_gradio: bool =
         )
     pending = int(_setting(settings, "max_pending_speech", 4))
     semaphore = asyncio.Semaphore(max(1, pending))
+    max_text_bytes = int(_setting(settings, "max_text_bytes", 30720))
 
     @app.get("/health")
     async def health():
@@ -210,6 +211,11 @@ def create_app(settings: Any, bridge, store: AudioStore, *, mount_gradio: bool =
 
     @app.post("/api/v1/speech")
     async def speech(payload: SpeechPayload):
+        if len(payload.text.encode("utf-8")) > max_text_bytes:
+            return JSONResponse(
+                {"detail": [{"loc": ["body", "text"], "msg": f"text must be at most {max_text_bytes} UTF-8 bytes", "type": "value_error"}]},
+                status_code=422,
+            )
         if semaphore.locked() and semaphore._value <= 0:
             return JSONResponse({"detail": "speech queue is busy"}, status_code=429)
         await semaphore.acquire()
