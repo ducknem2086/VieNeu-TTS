@@ -13,7 +13,7 @@ function page(fetchImpl) {
     if (!elements.has(id)) elements.set(id, {
       value: "hello", checked: true, dataset: {}, options: [], listeners: {},
       label: {}, addEventListener(event, callback) { this.listeners[event] = callback; },
-      querySelector() { return this.label; }, setAttribute() {},
+      querySelector() { return this.label; }, setAttribute() {}, focus() {},
       replaceChildren(...options) { this.options = options; },
       add(option) { this.options.push(option); },
     });
@@ -23,6 +23,7 @@ function page(fetchImpl) {
     createSpeechClient: () => createSpeechClient({ fetchImpl }),
     document: { getElementById }, window: { addEventListener() {} },
     fetch: fetchImpl, Option: function (name, value) { this.value = value; },
+    TextEncoder,
   });
   vm.runInContext(source, context);
   return { get: getElementById, context };
@@ -75,6 +76,27 @@ test("closing audio tabs prunes UI tracking while latest downloaded Blob can reo
     globalThis.setInterval = originalInterval;
     globalThis.clearInterval = originalClear;
   }
+});
+
+test("counter reports UTF-8 bytes against the 30 KiB limit", () => {
+  const { get } = page(async () => { throw new Error("unused"); });
+  const text = get("story-text");
+  text.value = "Xin chào";
+  text.listeners.input();
+  assert.equal(get("character-count").textContent, "9 / 30.720 byte");
+});
+
+test("submit refuses text over 30720 bytes without calling the API", async () => {
+  let calls = 0;
+  const { get } = page(async (url) => {
+    // checkHealth() also fetches at load; only speech requests count here.
+    if (url.endsWith("/speech")) calls += 1;
+    throw new Error("unused");
+  });
+  get("story-text").value = "ạ".repeat(10241);
+  await get("story-form").listeners.submit({ preventDefault() {} });
+  assert.equal(calls, 0);
+  assert.match(get("status-text").textContent, /30\.720 byte/);
 });
 
 test("loading a model does not label the disabled action as audio synthesis", async () => {

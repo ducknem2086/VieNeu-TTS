@@ -24,7 +24,7 @@ Start from the repository root with one process:
 
 Open <http://127.0.0.1:8002>. The model is not downloaded or loaded merely by opening the page. Select **Tải mô hình** or press **Bắt đầu** to load the default model on demand. Voice choices appear after loading; leaving the voice selector on **Tự động** uses the model's default preset voice. The first load can take time and may download model weights according to the upstream SDK configuration.
 
-The launcher defaults to `127.0.0.1:8002`. `STORY_BRIDGE_HOST`, `STORY_BRIDGE_PORT`, `STORY_BRIDGE_RUNTIME`, and `STORY_BRIDGE_MAX_PENDING` configure the host, port, runtime directory, and pending speech limit. Keep Uvicorn at **one worker**: the Gradio callback, model state, and generation queue are shared in this process. Do not launch the app through a multiworker Uvicorn command.
+The launcher defaults to `127.0.0.1:8002`. `STORY_BRIDGE_HOST`, `STORY_BRIDGE_PORT`, `STORY_BRIDGE_RUNTIME`, and `STORY_BRIDGE_MAX_PENDING` configure the host, port, runtime directory, and pending speech limit. `STORY_BRIDGE_MAX_TEXT_BYTES` (default `30720`) caps speech text in UTF-8 bytes, `STORY_BRIDGE_AUDIO_TTL` (default `300`) sets the generated-audio lifetime in seconds, and `STORY_BRIDGE_UPSTREAM_TIMEOUT` (default `900`) bounds each upstream Gradio call in seconds. Keep Uvicorn at **one worker**: the Gradio callback, model state, and generation queue are shared in this process. Do not launch the app through a multiworker Uvicorn command.
 
 ## HTTP API
 
@@ -35,7 +35,7 @@ The launcher defaults to `127.0.0.1:8002`. `STORY_BRIDGE_HOST`, `STORY_BRIDGE_PO
 | `POST /api/v1/model/load` | Explicitly loads the model; returns `{"model_loaded": true}` on success. |
 | `POST /api/v1/speech` | Accepts JSON and returns WAV bytes (`Content-Type: audio/wav`). |
 
-Speech JSON accepts `text` (required, nonblank, at most 20,000 characters), optional `voice_id`, `temperature` (default `0.8`, range `0.1`–`1.5`), `max_chars_per_chunk` (default `256`, range `128`–`512`), `batch_size` (default `16`, range `1`–`64`), and `use_batch` (default `true`). Unknown fields are rejected. Responses include `Cache-Control: no-store`, `Content-Disposition: inline`, `X-Audio-Id`, and `X-Audio-Expires-At` (UTC ISO time). Errors are JSON where available; a full speech queue returns `429`, and unavailable model or upstream integration returns `503`.
+Speech JSON accepts `text` (required, nonblank, at most `STORY_BRIDGE_MAX_TEXT_BYTES` UTF-8 bytes (default 30720)), optional `voice_id`, `temperature` (default `0.8`, range `0.1`–`1.5`), `max_chars_per_chunk` (default `256`, range `128`–`512`), `batch_size` (default `16`, range `1`–`64`), and `use_batch` (default `true`). Unknown fields are rejected. Responses include `Cache-Control: no-store`, `Content-Disposition: inline`, `X-Audio-Id`, and `X-Audio-Expires-At` (UTC ISO time). Errors are JSON where available; a full speech queue returns `429` with `Retry-After: 30`, and unavailable model or upstream integration returns `503`. Text that is not valid UTF-8, such as a lone surrogate, returns `422`.
 
 For a binary download with curl (Bash syntax):
 
@@ -78,8 +78,12 @@ Browser mixed-content and local-network rules also apply. Allowing an origin thr
 
 ## Audio lifetime and shared state
 
-Server-owned output WAVs in `.runtime/generated/` and managed output copies in `.runtime/cache/` expire **300 seconds after generation completes**. The cleanup loop runs at most five seconds apart and startup also sweeps persisted metadata, so expired outputs from a previous process are removed after restart. New reads are denied after expiry, while a read already in progress may finish. Normal Gradio reference and upload cache under `.runtime/gradio/` is outside this generated-output TTL.
+Server-owned output WAVs in `.runtime/generated/` and managed output copies in `.runtime/cache/` expire **`STORY_BRIDGE_AUDIO_TTL` seconds after generation completes** (default 300). The cleanup loop runs at most five seconds apart and startup also sweeps persisted metadata, so expired outputs from a previous process are removed after restart. New reads are denied after expiry, while a read already in progress may finish. Normal Gradio reference and upload cache under `.runtime/gradio/` is outside this generated-output TTL.
 
 The server's expiry does not erase bytes already downloaded to a browser or a saved `speech.wav`. An open Blob audio tab can keep playing until it closes or its owner calls `dispose()`; the page cleans its Blob URLs on unload. Gradio's original UI and this API share one model and one generation queue. Model loading or changing the model in the original UI changes shared process state, and Gradio stop/cancel actions can affect shared work. Avoid simultaneous control from multiple tabs if a stable model choice matters.
 
 When upgrading VieNeu-TTS or Gradio, recheck the story and load event bindings, their input/output component shapes, the Gradio client transport, and WAV output handling. Run the extension's Python contract tests and `node --test extensions/story_bridge/tests/speech-client.test.mjs` after upgrading; the bridge deliberately validates upstream bindings rather than silently assuming they stayed compatible.
+
+## Known limits
+
+- A client that disconnects does not cancel inference.

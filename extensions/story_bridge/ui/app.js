@@ -2,6 +2,9 @@ import { createSpeechClient } from "/client/speech-client.js";
 
 const client = createSpeechClient();
 const $ = (id) => document.getElementById(id);
+const MAX_TEXT_BYTES = 30720;
+const utf8 = new TextEncoder();
+const byteLength = (value) => utf8.encode(value).length;
 const form = $("story-form");
 const text = $("story-text");
 const voice = $("voice-select");
@@ -122,7 +125,7 @@ load.addEventListener("click", async () => {
 
 text.addEventListener("input", () => {
   $("character-count").textContent =
-    `${text.value.length.toLocaleString("vi-VN")} / 20.000 ký tự`;
+    `${byteLength(text.value).toLocaleString("vi-VN")} / ${MAX_TEXT_BYTES.toLocaleString("vi-VN")} byte`;
 });
 
 form.addEventListener("submit", async (event) => {
@@ -131,6 +134,11 @@ form.addEventListener("submit", async (event) => {
   const content = text.value.trim();
   if (!content) {
     setStatus("Hãy nhập nội dung trước khi bắt đầu.", "error");
+    text.focus();
+    return;
+  }
+  if (byteLength(content) > MAX_TEXT_BYTES) {
+    setStatus(`Nội dung vượt ${MAX_TEXT_BYTES.toLocaleString("vi-VN")} byte. Hãy rút ngắn rồi thử lại.`, "error");
     text.focus();
     return;
   }
