@@ -27,6 +27,17 @@ def test_text_limit_counts_utf8_bytes(tmp_path):
     assert len(bridge.calls) == 1
 
 
+def test_lone_surrogate_text_is_rejected_as_validation_error(tmp_path):
+    client, bridge = _client(tmp_path)
+    with client:
+        # httpx cannot encode a lone surrogate, so send the JSON escape as raw bytes.
+        response = client.post("/api/v1/speech", content=b'{"text": "\\ud800abc"}',
+                               headers={"content-type": "application/json"})
+        assert response.status_code == 422
+        assert "UTF-8" in response.text
+    assert bridge.calls == []
+
+
 def test_text_limit_reads_settings(tmp_path):
     client, _ = _client(tmp_path, {"max_text_bytes": 8})
     with client:

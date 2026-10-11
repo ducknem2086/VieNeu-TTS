@@ -36,6 +36,10 @@ class SpeechPayload(BaseModel):
     def valid_text(cls, value: str) -> str:
         if not value.strip():
             raise ValueError("text must be nonblank")
+        try:
+            value.encode("utf-8")
+        except UnicodeEncodeError:
+            raise ValueError("text must be valid UTF-8") from None
         return value
 
     @field_validator("temperature")
