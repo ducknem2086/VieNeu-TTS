@@ -85,7 +85,7 @@
 
 1. [🦜 Cài đặt & Giao diện Web](#installation)
 2. [📦 Sử dụng Python SDK](#sdk)
-3. [🐳 API Server & Docker](#docker-remote) — API streaming chuẩn OpenAI (v3 Turbo) · server v2 cũ
+3. [🐳 API Server & Docker](#docker-remote) — API streaming chuẩn OpenAI (v3 Turbo) · [Story Bridge JSON → WAV (port 8002)](#story-bridge) · server v2 cũ
 4. [📊 Benchmark](#benchmarks) — mọi số đo tốc độ / độ trễ ở một chỗ (CPU vs GPU, batch, streaming, Nano)
 5. [🎓 Fine-tune (LoRA)](#finetune)
 6. [🔬 Tổng quan mô hình](#backbones)
@@ -385,6 +385,64 @@ with client.audio.speech.with_streaming_response.create(
 Endpoint: `POST /v1/audio/speech`, `GET /v1/models`, `GET /v1/voices`, `POST /v1/voices` (nhân bản giọng từ clip upload), `GET /health`. Số luồng giới hạn theo backend (`VIENEU_MAX_STREAMS`, mặc định 16 trên GPU / 1 trên CPU), có hàng đợi nhỏ, quá thì `429`.
 
 📊 **[docs/streaming.vi.md](docs/streaming.vi.md)** — toàn bộ số đo trên RTX 3060 (TTFA / RTF / số luồng theo `max_streams`), dự đoán cho GPU nhỏ hơn, số đo CPU, và các lưu ý tinh chỉnh (ví dụ request đầu tiên sau khi GPU rỗi chậm thêm 100–300 ms vì GPU hạ xung).
+
+<a name="story-bridge"></a>
+### Story Bridge — API tự tạo audio thông báo từ request body (port 8002)
+
+Extension [`extensions/story_bridge`](extensions/story_bridge) mở một server riêng tại **`http://127.0.0.1:8002`**: trang đọc truyện ở `/` và API **JSON → WAV** để ứng dụng khác (web, bot, hệ thống thông báo) tự sinh audio từ nội dung gửi trong request body. Bridge dùng chung model và hàng đợi sinh với giao diện Gradio gốc (mount ở `/_gradio`), không chạy đường suy luận thứ hai.
+
+> [!NOTE]
+> Mở trang **không** tự tải model. Bấm **Tải mô hình** trên UI hoặc gọi `POST /api/v1/model/load`; lần nạp đầu có thể mất thời gian và tải weight theo cấu hình SDK.
+
+**Cài đặt & chạy** — từ thư mục gốc repo, sau khi đã cài SDK ở [§1](#installation):
+
+```powershell
+python -m pip install -r extensions/story_bridge/requirements.txt
+.venv/Scripts/python.exe -m extensions.story_bridge          # nghe http://127.0.0.1:8002
+```
+
+Nếu `.venv` tạo bởi `uv` không có `pip`, dùng `uv pip install --python .venv/Scripts/python.exe -r extensions/story_bridge/requirements.txt`. Chỉ chạy **1 worker** — model, callback Gradio và hàng đợi chia sẻ trong một tiến trình; không launch qua lệnh Uvicorn multi-worker.
+
+**Request** — `POST /api/v1/speech`, header `Content-Type: application/json`, body JSON (field lạ bị từ chối):
+
+| Tham số | Kiểu | Mặc định | Mô tả |
+|---|---|---|---|
+| `text` | string | — *(bắt buộc)* | Văn bản cần đọc; không rỗng, ≤ `STORY_BRIDGE_MAX_TEXT_BYTES` byte UTF-8 (mặc định 30720) |
+| `voice_id` | string \| null | `null` | ID giọng lấy từ `GET /api/v1/voices`; bỏ trống = giọng preset mặc định của model |
+| `temperature` | float | `0.8` | Độ sáng tạo, phạm vi `0.1`–`1.5`, phải hữu hạn |
+| `max_chars_per_chunk` | int | `256` | Số ký tự tối đa mỗi chunk, phạm vi `128`–`512` |
+| `batch_size` | int | `16` | Cỡ batch, phạm vi `1`–`64` |
+| `use_batch` | bool | `true` | Bật/tắt sinh theo lô |
+
+```bash
+curl --fail-with-body -X POST http://127.0.0.1:8002/api/v1/speech \
+  -H 'Content-Type: application/json' \
+  --data-binary '{"text":"Xin chào, đây là thông báo tự động.","voice_id":"Mai Anh","temperature":0.8}' \
+  --output speech.wav
+```
+
+**Response** — `200 OK` với thân là file WAV (`Content-Type: audio/wav`), kèm các header:
+
+| Header | Ý nghĩa |
+|---|---|
+| `X-Audio-Id` | ID của file audio đã sinh phía server |
+| `X-Audio-Expires-At` | Thời điểm hết hạn (ISO 8601 UTC) — file tự xoá sau `STORY_BRIDGE_AUDIO_TTL` giây (mặc định 300) |
+| `Content-Disposition` | `inline; filename="speech.wav"` |
+| `Cache-Control` | `no-store` |
+
+Lỗi trả về JSON `{"detail": …}`: **`422`** — thiếu/sai body, `text` rỗng hoặc quá dài, không phải UTF-8 hợp lệ · **`429`** — hàng đợi đầy (giới hạn `STORY_BRIDGE_MAX_PENDING`, mặc định 4), kèm `Retry-After: 30` · **`503`** — model chưa nạp hoặc upstream lỗi · **`410`** — audio đã hết hạn.
+
+**Các endpoint khác**:
+
+| Route | Mô tả |
+|---|---|
+| `GET /health` | `{"model_loaded": true/false}` |
+| `GET /api/v1/voices` | `{"voices": [{"id", "name"}]}` — có thể rỗng trước khi nạp model |
+| `POST /api/v1/model/load` | Nạp model chủ động, trả `{"model_loaded": true}` |
+
+**Biến môi trường**: `STORY_BRIDGE_HOST` / `STORY_BRIDGE_PORT` (mặc định `127.0.0.1` / `8002`) · `STORY_BRIDGE_MAX_TEXT_BYTES` (`30720`) · `STORY_BRIDGE_MAX_PENDING` (`4`) · `STORY_BRIDGE_AUDIO_TTL` (`300` giây — TTL của audio đã sinh trong `.runtime/`) · `STORY_BRIDGE_UPSTREAM_TIMEOUT` (`900` giây) · `STORY_BRIDGE_RUNTIME` · `STORY_BRIDGE_CORS_ORIGINS` (mặc định `http://localhost:5173,http://localhost:3000`; origin phải khớp cả scheme + host + port).
+
+Client JS dựng sẵn tại `/client/speech-client.js`: `createSpeechClient({baseUrl})` → `openInNewTab({text})` mở tab mới phát audio, hoặc `synthesize(payload)` trả `{blob, audioId, expiresAt}` cho workflow riêng. Bridge **không có xác thực** — chỉ dùng trong môi trường local tin cậy; chi tiết đầy đủ ở [extensions/story_bridge/README.md](extensions/story_bridge/README.md).
 
 ### Web UI trong Docker
 
