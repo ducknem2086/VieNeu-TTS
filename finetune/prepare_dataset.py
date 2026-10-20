@@ -66,8 +66,8 @@ def main() -> None:
     ap.add_argument("--metadata", default=None, help="default: <dataset-dir>/metadata.csv")
     ap.add_argument("--audio-dir", default=None, help="default: <dataset-dir>/raw_audio")
     ap.add_argument("--out", default=None, help="default: <dataset-dir>/train.parquet")
-    ap.add_argument("--min-sec", type=float, default=1.0)
-    ap.add_argument("--max-sec", type=float, default=20.0, help="longer clips are skipped (split them first)")
+    ap.add_argument("--min-sec", type=float, default=3.0)
+    ap.add_argument("--max-sec", type=float, default=15.0, help="longer clips are skipped (split them first)")
     ap.add_argument("--base", default="pnnbao-ump/VieNeu-TTS-v3-Turbo", help="model repo (codec + speaker encoder)")
     args = ap.parse_args()
 

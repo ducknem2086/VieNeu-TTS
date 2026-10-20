@@ -65,6 +65,19 @@ def test_too_long_rows_are_dropped_not_truncated():
     assert len(ds) == 1
 
 
+def test_prepare_dataset_arg_defaults():
+    from prepare_dataset import main
+    # Direct import from prepare_dataset when sys.path includes finetune/
+    import prepare_dataset
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--min-sec", type=float, default=3.0)
+    ap.add_argument("--max-sec", type=float, default=15.0)
+    args = ap.parse_args([])
+    assert args.min_sec == 3.0
+    assert args.max_sec == 15.0
+
+
 def test_labels_supervise_only_target_frames_and_eos():
     ds = V3TurboLoraDataset([_row(5), _row(3)], _Tok(), CFG, max_length=64)
     batch = collate_batch([ds[0], ds[1]], text_pad=0, audio_pad=V_AUDIO)

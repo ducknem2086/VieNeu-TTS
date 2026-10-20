@@ -27,7 +27,7 @@ finetune/dataset/
 ```
 
 - **Tất cả clip phải là cùng một người nói.** Đây là ràng buộc duy nhất của pipeline — một LoRA là một giọng.
-- Mỗi clip **1–20 giây**, nội dung đúng với `text` (kể cả dấu câu). Clip dài hơn hãy cắt nhỏ trước.
+- Mỗi clip **3–15 giây**, nội dung đúng với `text` (kể cả dấu câu). Clip dài hơn hãy cắt nhỏ trước.
 - Audio sạch, ít vang, không nhạc nền. Tần số lấy mẫu bất kỳ, mono hay stereo đều được.
 
 ```bash
